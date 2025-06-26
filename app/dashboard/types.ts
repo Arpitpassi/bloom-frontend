@@ -1,4 +1,5 @@
 export interface Pool {
+  sponsorInfo: string
   id: string
   name: string
   status: "Active" | "Ended"

@@ -42,6 +42,7 @@ export function usePoolManager(walletAddress: string, isWalletConnected: boolean
         Object.entries(poolsData).map(async ([id, pool]: [string, any]) => {
           const balance = await fetchBalance(id)
           return {
+            sponsorInfo: pool.sponsorInfo ?? "",
             id,
             name: pool.name,
             status: new Date() < new Date(pool.endTime) ? "Active" : "Ended",
