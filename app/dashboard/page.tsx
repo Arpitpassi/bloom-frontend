@@ -3,47 +3,25 @@
 import React, { useState, useEffect } from "react"
 import { X, Users, ClipboardPenIcon } from "lucide-react"
 import { ToastContainer, useToast } from "@/components/toast"
-import { localToZulu, isValidArweaveAddress } from '@/lib/utils'
-
-// Define interfaces for TypeScript type safety
-interface Pool {
-  id: string
-  name: string
-  status: "Active" | "Ended"
-  balance: number | null // Allow null until balance is fetched
-  usageCap: number
-  startTime: string
-  endTime: string
-  addresses: string[]
-  poolId: string
-  sponsorInfo: string
-}
-
-interface Strategy {
-  connect: (permissions: string[]) => Promise<void>
-  disconnect: () => Promise<void>
-  getActiveAddress: () => Promise<string>
-}
-
-// Constants
-const DEPLOY_API_KEY = 'deploy-api-key-123' // Verify this matches your server's expected API key
-const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3000" // Use environment variable or default to localhost:3000
+import { localToZulu, isValidArweaveAddress, formatDateTime } from './utils'
+import { TimeLeftDial } from './TimeLeftDial'
+import { Pool, Strategy } from './types'
+import { usePoolManager } from './usePoolManager'
 
 export default function Dashboard() {
   const [isWalletConnected, setIsWalletConnected] = useState(false)
   const [walletAddress, setWalletAddress] = useState("")
   const [activeStrategy, setActiveStrategy] = useState<Strategy | null>(null)
-  const [selectedPool, setSelectedPool] = useState<Pool | null>(null)
   const [showWalletModal, setShowWalletModal] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [showPoolActions, setShowPoolActions] = useState(false)
   const [showAddressesModal, setShowAddressesModal] = useState(false)
-  const [totalPools, setTotalPools] = useState(0)
-  const [activePools, setActivePools] = useState(0)
   const [revokeAddress, setRevokeAddress] = useState("")
-  const [pools, setPools] = useState<Pool[]>([])
   const { toasts, removeToast, showSuccess, showError, showWarning, showInfo } = useToast()
+  const { pools, selectedPool, setSelectedPool, totalPools, setTotalPools, activePools, setActivePools, 
+          fetchBalance, loadPools, handleCreatePool, handleEditPool, handleDeletePool, 
+          handleRevokeAccess, handleDownloadWallet, handleTopUp, handleSponsorCredits, handleRefreshBalance } = usePoolManager(walletAddress, isWalletConnected, setShowPoolActions, setShowCreateModal, setShowEditModal)
 
   // Initialize wallet strategies only on the client side
   const [browserWalletStrategy, setBrowserWalletStrategy] = useState<Strategy | null>(null)
@@ -106,92 +84,6 @@ export default function Dashboard() {
     }
   }, [])
 
-  // Load pools when wallet connects or disconnects
-  useEffect(() => {
-    if (isWalletConnected) {
-      loadPools()
-    } else {
-      setPools([])
-      setTotalPools(0)
-      setActivePools(0)
-      setSelectedPool(null)
-      setShowPoolActions(false)
-    }
-  }, [isWalletConnected])
-
-  const fetchBalance = async (poolId: string): Promise<number | null> => {
-    try {
-      const balanceUrl = new URL(`${SERVER_URL}/pool/${encodeURIComponent(poolId)}/balance`)
-      balanceUrl.searchParams.append('creatorAddress', walletAddress)
-      const response = await fetch(balanceUrl, {
-        method: 'GET',
-        headers: { 'X-API-Key': DEPLOY_API_KEY },
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        throw new Error(`${result.error || 'Failed to fetch balance'} (${result.code || 'UNKNOWN_ERROR'})`)
-      }
-      return result.balance.effectiveBalance
-    } catch (error) {
-      console.error(`Fetch balance error for pool ${poolId}:`, error)
-      showError("Balance Fetch Failed", `Error fetching balance for pool ${poolId}: ${error instanceof Error ? error.message : String(error)}`)
-      return null
-    }
-  }
-
-  const loadPools = async () => {
-    if (!walletAddress) {
-      setPools([])
-      setTotalPools(0)
-      setActivePools(0)
-      return
-    }
-    try {
-      const response = await fetch(`${SERVER_URL}/pools?creatorAddress=${encodeURIComponent(walletAddress)}`, {
-        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-      })
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(`${errorData.error || 'Failed to fetch pools'} (${errorData.code || 'UNKNOWN_ERROR'})`)
-      }
-      const poolsData = await response.json()
-      console.log('Fetched pools:', poolsData) // Log response for debugging
-      const poolArray: Pool[] = await Promise.all(
-        Object.entries(poolsData).map(async ([id, pool]: [string, any]) => {
-          const balance = await fetchBalance(id)
-          return {
-            id,
-            name: pool.name,
-            status: new Date() < new Date(pool.endTime) ? "Active" : "Ended",
-            balance,
-            usageCap: pool.usageCap,
-            startTime: pool.startTime,
-            endTime: pool.endTime,
-            addresses: pool.whitelist,
-            poolId: id,
-            sponsorInfo: pool.sponsorInfo || ''
-          }
-        })
-      )
-      setPools(poolArray)
-      setTotalPools(poolArray.length)
-      setActivePools(poolArray.filter(pool => pool.status === "Active").length)
-      // Fetch balance for selected pool if it exists
-      if (selectedPool) {
-        const updatedSelectedPool = poolArray.find(pool => pool.id === selectedPool.id)
-        if (updatedSelectedPool) {
-          setSelectedPool(updatedSelectedPool)
-        }
-      }
-    } catch (error) {
-      console.error('Load pools error:', error) // Detailed error logging
-      showError("Load Failed", `Error loading pools: ${error instanceof Error ? error.message : String(error)}`)
-      setPools([])
-      setTotalPools(0)
-      setActivePools(0)
-    }
-  }
-
   const handleConnectWallet = () => {
     if (!browserWalletStrategy || !beaconStrategy) {
       showError("Initialization Error", "Wallet strategies are not yet loaded. Please try again.")
@@ -218,7 +110,7 @@ export default function Dashboard() {
       setShowWalletModal(false)
       showSuccess("Wallet Connected", `Successfully connected with ${type === "beacon" ? "Beacon" : "Wander"} wallet`)
     } catch (error) {
-      console.error('Wallet connection error:', error) // Detailed error logging
+      console.error('Wallet connection error:', error)
       showError(
         "Connection Failed",
         `Error connecting wallet: ${error instanceof Error ? error.message : String(error)}`
@@ -238,7 +130,7 @@ export default function Dashboard() {
       setShowPoolActions(false)
       showInfo("Wallet Disconnected", "Your wallet has been disconnected")
     } catch (error) {
-      console.error('Wallet disconnection error:', error) // Detailed error logging
+      console.error('Wallet disconnection error:', error)
       showError(
         "Disconnection Failed",
         `Error disconnecting wallet: ${error instanceof Error ? error.message : String(error)}`
@@ -253,7 +145,7 @@ export default function Dashboard() {
       const balance = await fetchBalance(pool.id)
       if (balance !== null) {
         setPools(prev =>
-          prev.map(p => (p.id === pool.id ? { ...p, balance } : p))
+          prev.map((p: { id: string }) => (p.id === pool.id ? { ...p, balance } : p))
         )
         setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
       }
@@ -262,332 +154,6 @@ export default function Dashboard() {
 
   const handlePoolActions = () => {
     setShowPoolActions(true)
-  }
-
-  const handleCreatePool = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const formData = new FormData(e.target as HTMLFormElement)
-    const poolName = formData.get("poolName") as string
-    const poolPassword = formData.get("poolPassword") as string
-    const confirmPassword = formData.get("confirmPassword") as string
-    const startTime = formData.get("startTime") as string
-    const endTime = formData.get("endTime") as string
-    const usageCap = parseFloat(formData.get("usageCap") as string)
-    const addresses = (formData.get("addresses") as string).split('\n').map(a => a.trim()).filter(a => a)
-    const sponsorInfo = formData.get("sponsorInfo") as string
-
-    if (!poolName.trim()) return showError("Invalid Pool Name", "Please enter a valid pool name")
-    if (!poolPassword) return showError("Password Required", "Please enter a pool password")
-    if (poolPassword !== confirmPassword) return showError("Passwords Mismatch", "Passwords do not match")
-    const invalidAddresses = addresses.filter(a => !isValidArweaveAddress(a))
-    if (invalidAddresses.length > 0) return showError("Invalid Addresses", `Please fix invalid addresses: ${invalidAddresses.join(', ')}`)
-    const startDateTime = new Date(startTime)
-    const endDateTime = new Date(endTime)
-    if (startDateTime >= endDateTime) return showError("Invalid Dates", "Start time must be before end time")
-
-    const poolData = {
-      name: poolName,
-      password: poolPassword,
-      startTime: localToZulu(startTime),
-      endTime: localToZulu(endTime),
-      usageCap,
-      whitelist: addresses,
-      creatorAddress: walletAddress,
-      sponsorInfo
-    }
-
-    try {
-      const response = await fetch(`${SERVER_URL}/create-pool`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-        body: JSON.stringify(poolData)
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        throw new Error(`${result.error || 'Failed to create pool'} (${result.code || 'UNKNOWN_ERROR'})`)
-      }
-      setShowCreateModal(false)
-      setTotalPools(prev => prev + 1)
-      showSuccess("Pool Created", `Pool "${poolName}" has been created successfully`)
-      await loadPools()
-      // Select the new pool and fetch its balance
-      const newPool = pools.find(pool => pool.name === poolName)
-      if (newPool) {
-        await handlePoolSelect(newPool)
-      }
-    } catch (error) {
-      console.error('Create pool error:', error) // Detailed error logging
-      showError(
-        "Creation Failed",
-        `Error creating pool: ${error instanceof Error ? error.message : String(error)}`
-      )
-    }
-  }
-
-  const handleEditPool = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!selectedPool) return showError("No Pool Selected", "Please select a pool to edit")
-    const formData = new FormData(e.target as HTMLFormElement)
-    const poolName = formData.get("poolName") as string
-    const startTime = formData.get("startTime") as string
-    const endTime = formData.get("endTime") as string
-    const usageCap = parseFloat(formData.get("usageCap") as string)
-    const addresses = (formData.get("addresses") as string).split('\n').map(a => a.trim()).filter(a => a)
-    const sponsorInfo = formData.get("sponsorInfo") as string
-    const password = window.prompt('Enter the pool password to confirm changes:')
-    if (!password) return showError("Password Required", "Password required to edit pool")
-
-    if (!poolName.trim()) return showError("Invalid Pool Name", "Please enter a valid pool name")
-    const invalidAddresses = addresses.filter(a => !isValidArweaveAddress(a))
-    if (invalidAddresses.length > 0) return showError("Invalid Addresses", `Please fix invalid addresses: ${invalidAddresses.join(', ')}`)
-    const startDateTime = new Date(startTime)
-    const endDateTime = new Date(endTime)
-    if (startDateTime >= endDateTime) return showError("Invalid Dates", "Start time must be before end time")
-
-    const poolData = {
-      name: poolName,
-      startTime: localToZulu(startTime),
-      endTime: localToZulu(endTime),
-      usageCap,
-      whitelist: addresses,
-      creatorAddress: walletAddress,
-      sponsorInfo
-    }
-
-    try {
-      console.log('Editing pool with ID:', selectedPool.id, 'Payload:', poolData) // Debug log
-      const editUrl = new URL(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}/edit`)
-      editUrl.searchParams.append('password', password)
-      editUrl.searchParams.append('creatorAddress', walletAddress)
-      const response = await fetch(editUrl, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-        body: JSON.stringify(poolData)
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        throw new Error(`${result.error || 'Failed to update pool'} (${result.code || 'UNKNOWN_ERROR'})`)
-      }
-      setShowEditModal(false)
-      showSuccess("Pool Updated", `Pool "${poolName}" has been updated successfully`)
-      await loadPools()
-      // Refresh balance for the edited pool
-      const balance = await fetchBalance(selectedPool.id)
-      if (balance !== null) {
-        setPools(prev =>
-          prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
-        )
-        setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
-      }
-    } catch (error) {
-      console.error('Edit pool error:', error) // Detailed error logging
-      showError(
-        "Update Failed",
-        `Error updating pool: ${error instanceof Error ? error.message : String(error)}`
-      )
-    }
-  }
-
-  const handleDeletePool = async () => {
-    if (!selectedPool) return showError("No Pool Selected", "Please select a pool to delete")
-    const confirmDelete = window.confirm('Are you sure you want to delete this pool? This action cannot be undone.')
-    if (!confirmDelete) return
-    const password = window.prompt('Enter the pool password to confirm deletion:')
-    if (!password) return showError("Password Required", "Password is required to delete the pool")
-
-    try {
-      const response = await fetch(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-        body: JSON.stringify({ password, creatorAddress: walletAddress })
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        throw new Error(`${result.error || 'Failed to delete pool'} (${result.code || 'UNKNOWN_ERROR'})`)
-      }
-      setPools(prev => prev.filter(pool => pool.id !== selectedPool.id))
-      setTotalPools(prev => prev - 1)
-      setSelectedPool(null)
-      setShowPoolActions(false)
-      showSuccess("Pool Deleted", `Pool "${selectedPool.name}" has been deleted successfully`)
-      loadPools()
-    } catch (error) {
-      console.error('Delete pool error:', error) // Detailed error logging
-      showError("Deletion Failed", `Error deleting pool: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  const handleRevokeAccess = async () => {
-    if (!revokeAddress.trim()) return showError("Invalid Address", "Please enter a valid wallet address")
-    if (!isValidArweaveAddress(revokeAddress)) return showError("Invalid Address", "Please enter a valid Arweave address")
-    if (!selectedPool) return showError("No Pool Selected", "Please select a pool first")
-    const password = window.prompt('Enter the pool password to revoke access:')
-    if (!password) return showError("Password Required", "Password required to revoke access")
-
-    try {
-      const revokeUrl = new URL(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}/revoke`)
-      revokeUrl.searchParams.append('password', password)
-      revokeUrl.searchParams.append('creatorAddress', walletAddress)
-      const revokeResponse = await fetch(revokeUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-        body: JSON.stringify({ walletAddress: revokeAddress })
-      })
-      const revokeResult = await revokeResponse.json()
-      if (!revokeResponse.ok) {
-        throw new Error(`${revokeResult.error || 'Failed to revoke access'} (${revokeResult.code || 'UNKNOWN_ERROR'})`)
-      }
-      const updatedPools = pools.map(pool =>
-        pool.id === selectedPool.id
-          ? { ...pool, addresses: pool.addresses.filter(addr => addr !== revokeAddress) }
-          : pool
-      )
-      setPools(updatedPools)
-      setSelectedPool(prev => prev ? { ...prev, addresses: prev.addresses.filter(addr => addr !== revokeAddress) } : null)
-      setRevokeAddress("")
-      showSuccess("Access Revoked", `Successfully revoked access for ${revokeAddress.slice(0, 10)}...`)
-      loadPools()
-    } catch (error) {
-      console.error('Revoke access error:', error) // Detailed error logging
-      showError("Revoke Failed", `Error revoking access: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  const handleDownloadWallet = async () => {
-    if (!selectedPool) return showError("No Pool Selected", "Please select a pool first")
-    const password = window.prompt('Enter the pool password to download wallet:')
-    if (!password) return showError("Password Required", "Password required to download wallet")
-
-    try {
-      const url = new URL(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}/wallet`)
-      url.searchParams.append('password', password)
-      url.searchParams.append('creatorAddress', walletAddress)
-      const response = await fetch(url, {
-        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY }
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        throw new Error(`${result.error || 'Failed to download wallet'} (${result.code || 'UNKNOWN_ERROR'})`)
-      }
-      const walletBlob = new Blob([JSON.stringify(result.wallet, null, 2)], { type: 'application/json' })
-      const urlObj = window.URL.createObjectURL(walletBlob)
-      const a = document.createElement('a')
-      a.href = urlObj
-      a.download = `pool-${selectedPool.id}-wallet.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      window.URL.revokeObjectURL(urlObj)
-      showSuccess("Wallet Downloaded", "Pool wallet key file has been downloaded")
-    } catch (error) {
-      console.error('Download wallet error:', error) // Detailed error logging
-      showError("Download Failed", `Error downloading wallet: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  const handleTopUp = async () => {
-    if (!selectedPool) return showError("No Pool Selected", "Please select a pool first")
-    const password = window.prompt('Enter the pool password to top up:')
-    if (!password) return showError("Password Required", "Password required to top up pool")
-    const amount = window.prompt('Enter AR amount to top up:')
-    if (!amount || parseFloat(amount) <= 0) return showError("Invalid Amount", "Amount must be greater than 0")
-
-    try {
-      const url = new URL(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}/topup`)
-      url.searchParams.append('creatorAddress', walletAddress)
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-        body: JSON.stringify({ password, amount })
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        throw new Error(`${result.error || 'Failed to top up pool'} (${result.code || 'UNKNOWN_ERROR'})`)
-      }
-      showSuccess("Pool Topped Up", `Pool topped up successfully! Transaction ID: ${result.transactionId}`)
-      // Refresh balance after top-up
-      const balance = await fetchBalance(selectedPool.id)
-      if (balance !== null) {
-        setPools(prev =>
-          prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
-        )
-        setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
-      }
-    } catch (error) {
-      console.error('Top up pool error:', error) // Detailed error logging
-      showError("Top Up Failed", `Error topping up pool: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  const handleRefreshBalance = async () => {
-    if (!selectedPool) return showError("No Pool Selected", "Please select a pool first")
-    const balance = await fetchBalance(selectedPool.id)
-    if (balance !== null) {
-      setPools(prev =>
-        prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
-      )
-      setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
-      showSuccess("Balance Refreshed", `Balance for pool "${selectedPool.name}" has been updated`)
-    }
-  }
-
-  const handleSponsorCredits = async () => {
-    if (!selectedPool) return showError("No Pool Selected", "Please select a pool first")
-    const password = window.prompt('Enter the pool password to sponsor credits:')
-    if (!password) return showError("Password Required", "Password required to sponsor credits")
-    if (selectedPool.addresses.length === 0) return showError("No Addresses", "No whitelisted addresses to sponsor credits for")
-
-    try {
-      let successfulShares = 0
-      const errors: string[] = []
-      for (const addr of selectedPool.addresses) {
-        try {
-          const response = await fetch(`${SERVER_URL}/share-credits`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-            body: JSON.stringify({ eventPoolId: selectedPool.id, walletAddress: addr, password })
-          })
-          const result = await response.json()
-          if (response.ok) {
-            successfulShares++
-          } else {
-            const errorMsg = `Failed to sponsor credits for ${addr.slice(0, 10)}...: ${result.error || 'Unknown error'} (${result.code || 'UNKNOWN_ERROR'})`
-            console.error(errorMsg)
-            errors.push(errorMsg)
-          }
-        } catch (error) {
-          const errorMsg = `Failed to sponsor credits for ${addr.slice(0, 10)}...: ${error instanceof Error ? error.message : String(error)}`
-          console.error(errorMsg)
-          errors.push(errorMsg)
-        }
-      }
-
-      if (successfulShares > 0) {
-        const message = `Successfully sponsored credits to ${successfulShares} of ${selectedPool.addresses.length} addresses`
-        if (errors.length > 0) {
-          showWarning("Partial Success", `${message}. Errors: ${errors.join('; ')}`)
-        } else {
-          showSuccess("Credits Sponsored", message)
-        }
-      } else {
-        showError("Sponsor Failed", errors.length > 0 ? `No credits sponsored. Errors: ${errors.join('; ')}` : "No credits sponsored.")
-      }
-
-      // Refresh balance after sponsoring credits
-      const balance = await fetchBalance(selectedPool.id)
-      if (balance !== null) {
-        setPools(prev =>
-          prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
-        )
-        setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
-      }
-    } catch (error) {
-      console.error('Sponsor credits error:', error)
-      showError(
-        "Sponsor Failed",
-        `Error sponsoring credits: ${error instanceof Error ? error.message : String(error)}`
-      )
-    }
   }
 
   const handleCopyAddress = async (address: string) => {
@@ -635,7 +201,7 @@ export default function Dashboard() {
               <div className="text-sm text-gray-600 space-y-1">
                 <div>Balance: <span className="font-medium text-gray-900">{pool.balance !== null ? pool.balance.toFixed(4) : "Loading..."}</span></div>
                 <div>Usage Cap: <span className="font-medium text-gray-900">{pool.usageCap.toFixed(4)}</span></div>
-                <div className="text-xs">Duration: {pool.startTime} - {pool.endTime}</div>
+                <div className="text-xs">Duration: {formatDateTime(pool.startTime)} - {formatDateTime(pool.endTime)}</div>
                 <div>Addresses: <span className="font-medium text-gray-900">{pool.addresses.length}</span></div>
               </div>
               {selectedPool?.id === pool.id && (
@@ -682,7 +248,7 @@ export default function Dashboard() {
               <p className="text-base mb-6 text-gray-600">Connect your Arweave wallet to continue</p>
               <button
                 onClick={handleConnectWallet}
-                className="bg-gray-900 text-white px-8 py-3 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
+                className="akarta bg-gray-900 text-white px-8 py-3 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
               >
                 CONNECT WALLET
               </button>
@@ -720,7 +286,7 @@ export default function Dashboard() {
                       className="w-full p-3 border border-gray-300 rounded-lg bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                     />
                     <button
-                      onClick={handleRevokeAccess}
+                      onClick={() => handleRevokeAccess(revokeAddress)}
                       className="w-full bg-orange-500 text-white p-3 rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors"
                     >
                       REVOKE ACCESS
@@ -780,26 +346,8 @@ export default function Dashboard() {
                       </span>
                     </div>
                     <div className="flex justify-between py-3 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Pool ID:</span>
-                      <span className="font-mono text-sm text-gray-900">{selectedPool.poolId}</span>
-                    </div>
-                    <div className="flex justify-between py-3 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Start Time:</span>
-                      <span className="font-semibold text-gray-900">{selectedPool.startTime}</span>
-                    </div>
-                    <div className="flex justify-between py-3 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">End Time:</span>
-                      <span className="font-semibold text-gray-900">{selectedPool.endTime}</span>
-                    </div>
-                    <div className="flex justify-between py-3 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Usage Cap:</span>
-                      <span className="font-semibold text-gray-900">{selectedPool.usageCap} Credits</span>
-                    </div>
-                    <div className="flex justify-between py-3 border-b border-gray-100">
-                      <span className="text-gray-600 font-medium">Current Balance:</span>
-                      <span className="font-semibold text-gray-900">
-                        {selectedPool.balance !== null ? `${selectedPool.balance.toFixed(2)} Credits` : "Loading..."}
-                      </span>
+                      <span className="text-gray-600 font-medium">Time Left:</span>
+                      <TimeLeftDial startTime={selectedPool.startTime} endTime={selectedPool.endTime} />
                     </div>
                     <div className="flex justify-between py-3">
                       <span className="text-gray-600 font-medium">Whitelisted Addresses ({selectedPool.addresses.length}):</span>
@@ -873,13 +421,15 @@ export default function Dashboard() {
       {showAddressesModal && selectedPool && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white border-2 border-black shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-8 relative">
-            <button
-              onClick={() => setShowAddressesModal(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-            >
-              <X className="w-6 h-6" />
-            </button>
-            <h3 className="text-xl font-semibold mb-6 text-gray-900">Whitelisted Addresses ({selectedPool.addresses.length})</h3>
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-semibold text-gray-900">Whitelisted Addresses ({selectedPool.addresses.length})</h3>
+              <button
+                onClick={() => setShowAddressesModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
             <div className="space-y-3">
               {selectedPool.addresses.map((address, index) => (
                 <div key={index} className="flex items-center justify-between bg-gray-50 border-2 border-black p-4 font-mono text-sm break-all">
@@ -977,15 +527,6 @@ export default function Dashboard() {
                   className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                 ></textarea>
               </div>
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-gray-700">SPONSOR INFORMATION</label>
-                <textarea
-                  name="sponsorInfo"
-                  rows={4}
-                  className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                  required
-                ></textarea>
-              </div>
               <div className="flex gap-4">
                 <button
                   type="submit"
@@ -1072,16 +613,6 @@ export default function Dashboard() {
                   className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
                 ></textarea>
               </div>
-              <div>
-                <label className="block text-sm font-semibold mb-2 text-gray-700">SPONSOR INFORMATION</label>
-                <textarea
-                  name="sponsorInfo"
-                  rows={4}
-                  defaultValue={selectedPool.sponsorInfo || ''}
-                  className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
-                  required
-                ></textarea>
-              </div>
               <div className="flex gap-4">
                 <button
                   type="submit"
@@ -1103,4 +634,8 @@ export default function Dashboard() {
       )}
     </div>
   )
+}
+
+function setPools(arg0: (prev: any) => any) {
+  throw new Error("Function not implemented.")
 }
