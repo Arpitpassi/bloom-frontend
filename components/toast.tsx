@@ -1,121 +1,77 @@
-"use client"
+import React, { useState, useCallback } from 'react'
+import { X } from 'lucide-react'
 
-import { useState, useEffect } from "react"
-import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from "lucide-react"
-
-export interface Toast {
+interface Toast {
   id: string
-  type: "success" | "error" | "info" | "warning"
+  type: 'success' | 'error' | 'warning' | 'info'
   title: string
-  message?: string
-  duration?: number
+  message: string
 }
 
 interface ToastProps {
-  toast: Toast
-  onRemove: (id: string) => void
-}
-
-function ToastComponent({ toast, onRemove }: ToastProps) {
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      onRemove(toast.id)
-    }, toast.duration || 5000)
-
-    return () => clearTimeout(timer)
-  }, [toast.id, toast.duration, onRemove])
-
-  const getIcon = () => {
-    switch (toast.type) {
-      case "success":
-        return <CheckCircle className="w-5 h-5 text-green-600" />
-      case "error":
-        return <AlertCircle className="w-5 h-5 text-red-600" />
-      case "warning":
-        return <AlertTriangle className="w-5 h-5 text-yellow-600" />
-      case "info":
-        return <Info className="w-5 h-5 text-blue-600" />
-    }
-  }
-
-  const getBorderColor = () => {
-    switch (toast.type) {
-      case "success":
-        return "border-green-200 bg-green-50"
-      case "error":
-        return "border-red-200 bg-red-50"
-      case "warning":
-        return "border-yellow-200 bg-yellow-50"
-      case "info":
-        return "border-blue-200 bg-blue-50"
-    }
-  }
-
-  return (
-    <div
-      className={`flex items-start gap-3 p-4 border-2 border-black bg-white shadow-lg max-w-md w-full ${getBorderColor()}`}
-    >
-      {getIcon()}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-900">{toast.title}</p>
-        {toast.message && <p className="text-sm text-gray-600 mt-1">{toast.message}</p>}
-      </div>
-      <button onClick={() => onRemove(toast.id)} className="text-gray-400 hover:text-gray-600 transition-colors">
-        <X className="w-4 h-4" />
-      </button>
-    </div>
-  )
-}
-
-interface ToastContainerProps {
   toasts: Toast[]
   onRemove: (id: string) => void
 }
 
-export function ToastContainer({ toasts, onRemove }: ToastContainerProps) {
-  return (
-    <div className="fixed top-4 right-4 z-50 space-y-2">
-      {toasts.map((toast) => (
-        <ToastComponent key={toast.id} toast={toast} onRemove={onRemove} />
-      ))}
-    </div>
-  )
+interface ToastHook {
+  toasts: Toast[]
+  showSuccess: (title: string, message: string) => void
+  showError: (title: string, message: string) => void
+  showWarning: (title: string, message: string) => void
+  showInfo: (title: string, message: string) => void
+  removeToast: (id: string) => void
 }
 
-export function useToast() {
+export const useToast = (): ToastHook => {
   const [toasts, setToasts] = useState<Toast[]>([])
 
-  const addToast = (toast: Omit<Toast, "id">) => {
+  const addToast = useCallback((type: Toast['type'], title: string, message: string) => {
     const id = Math.random().toString(36).substr(2, 9)
-    setToasts((prev) => [...prev, { ...toast, id }])
-  }
+    setToasts((prev) => [...prev, { id, type, title, message }])
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((toast) => toast.id !== id))
+    }, 5000)
+  }, [])
 
-  const removeToast = (id: string) => {
+  const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((toast) => toast.id !== id))
-  }
-
-  const showSuccess = (title: string, message?: string) => {
-    addToast({ type: "success", title, message })
-  }
-
-  const showError = (title: string, message?: string) => {
-    addToast({ type: "error", title, message })
-  }
-
-  const showWarning = (title: string, message?: string) => {
-    addToast({ type: "warning", title, message })
-  }
-
-  const showInfo = (title: string, message?: string) => {
-    addToast({ type: "info", title, message })
-  }
+  }, [])
 
   return {
     toasts,
+    showSuccess: (title, message) => addToast('success', title, message),
+    showError: (title, message) => addToast('error', title, message),
+    showWarning: (title, message) => addToast('warning', title, message),
+    showInfo: (title, message) => addToast('info', title, message),
     removeToast,
-    showSuccess,
-    showError,
-    showWarning,
-    showInfo,
   }
+}
+
+export const ToastContainer: React.FC<ToastProps> = ({ toasts, onRemove }) => {
+  return (
+    <div className="fixed top-4 right-4 space-y-2 z-50">
+      {toasts.map((toast) => (
+        <div
+          key={toast.id}
+          className={`flex items-center justify-between p-4 rounded-lg shadow-lg border text-sm max-w-md ${
+            toast.type === 'success'
+              ? 'bg-green-100 border-green-500 text-green-700'
+              : toast.type === 'error'
+              ? 'bg-red-100 border-red-500 text-red-700'
+              : toast.type === 'warning'
+              ? 'bg-yellow-100 border-yellow-500 text-yellow-700'
+              : 'bg-blue-100 border-blue-500 text-blue-700'
+          }`}
+        >
+          <div>
+            <div className="font-semibold">{toast.title}</div>
+            <div>{toast.message}</div>
+          </div>
+          <button onClick={() => onRemove(toast.id)} className="ml-4">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
 }

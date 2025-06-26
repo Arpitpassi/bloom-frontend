@@ -1,6 +1,8 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+export function isValidArweaveAddress(address: string): boolean {
+  return /^[a-zA-Z0-9\-_]{43}$/.test(address)
+}
 
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+export function localToZulu(localDateTime: string): string {
+  const date = new Date(localDateTime)
+  return date.toISOString()
 }
