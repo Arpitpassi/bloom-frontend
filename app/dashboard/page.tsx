@@ -1,4 +1,3 @@
-
 "use client"
 
 import React, { useState, useEffect } from "react"
@@ -11,7 +10,7 @@ interface Pool {
   id: string
   name: string
   status: "Active" | "Ended"
-  balance: number
+  balance: number | null // Allow null until balance is fetched
   usageCap: number
   startTime: string
   endTime: string
@@ -120,6 +119,26 @@ export default function Dashboard() {
     }
   }, [isWalletConnected])
 
+  const fetchBalance = async (poolId: string): Promise<number | null> => {
+    try {
+      const balanceUrl = new URL(`${SERVER_URL}/pool/${encodeURIComponent(poolId)}/balance`)
+      balanceUrl.searchParams.append('creatorAddress', walletAddress)
+      const response = await fetch(balanceUrl, {
+        method: 'GET',
+        headers: { 'X-API-Key': DEPLOY_API_KEY },
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(`${result.error || 'Failed to fetch balance'} (${result.code || 'UNKNOWN_ERROR'})`)
+      }
+      return result.balance.effectiveBalance
+    } catch (error) {
+      console.error(`Fetch balance error for pool ${poolId}:`, error)
+      showError("Balance Fetch Failed", `Error fetching balance for pool ${poolId}: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
+  }
+
   const loadPools = async () => {
     if (!walletAddress) {
       setPools([])
@@ -137,21 +156,33 @@ export default function Dashboard() {
       }
       const poolsData = await response.json()
       console.log('Fetched pools:', poolsData) // Log response for debugging
-      const poolArray: Pool[] = Object.entries(poolsData).map(([id, pool]: [string, any]) => ({
-        id,
-        name: pool.name,
-        status: new Date() < new Date(pool.endTime) ? "Active" : "Ended",
-        balance: 0, // Will be updated separately if needed
-        usageCap: pool.usageCap,
-        startTime: pool.startTime,
-        endTime: pool.endTime,
-        addresses: pool.whitelist,
-        poolId: id,
-        sponsorInfo: pool.sponsorInfo || ''
-      }))
+      const poolArray: Pool[] = await Promise.all(
+        Object.entries(poolsData).map(async ([id, pool]: [string, any]) => {
+          const balance = await fetchBalance(id)
+          return {
+            id,
+            name: pool.name,
+            status: new Date() < new Date(pool.endTime) ? "Active" : "Ended",
+            balance,
+            usageCap: pool.usageCap,
+            startTime: pool.startTime,
+            endTime: pool.endTime,
+            addresses: pool.whitelist,
+            poolId: id,
+            sponsorInfo: pool.sponsorInfo || ''
+          }
+        })
+      )
       setPools(poolArray)
       setTotalPools(poolArray.length)
       setActivePools(poolArray.filter(pool => pool.status === "Active").length)
+      // Fetch balance for selected pool if it exists
+      if (selectedPool) {
+        const updatedSelectedPool = poolArray.find(pool => pool.id === selectedPool.id)
+        if (updatedSelectedPool) {
+          setSelectedPool(updatedSelectedPool)
+        }
+      }
     } catch (error) {
       console.error('Load pools error:', error) // Detailed error logging
       showError("Load Failed", `Error loading pools: ${error instanceof Error ? error.message : String(error)}`)
@@ -215,9 +246,18 @@ export default function Dashboard() {
     }
   }
 
-  const handlePoolSelect = (pool: Pool) => {
-    setSelectedPool(pool)
+  const handlePoolSelect = async (pool: Pool) => {
+    setSelectedPool({ ...pool, balance: pool.balance ?? null })
     setShowPoolActions(false)
+    if (pool.balance === null) {
+      const balance = await fetchBalance(pool.id)
+      if (balance !== null) {
+        setPools(prev =>
+          prev.map(p => (p.id === pool.id ? { ...p, balance } : p))
+        )
+        setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
+      }
+    }
   }
 
   const handlePoolActions = () => {
@@ -269,7 +309,12 @@ export default function Dashboard() {
       setShowCreateModal(false)
       setTotalPools(prev => prev + 1)
       showSuccess("Pool Created", `Pool "${poolName}" has been created successfully`)
-      loadPools()
+      await loadPools()
+      // Select the new pool and fetch its balance
+      const newPool = pools.find(pool => pool.name === poolName)
+      if (newPool) {
+        await handlePoolSelect(newPool)
+      }
     } catch (error) {
       console.error('Create pool error:', error) // Detailed error logging
       showError(
@@ -311,31 +356,29 @@ export default function Dashboard() {
 
     try {
       console.log('Editing pool with ID:', selectedPool.id, 'Payload:', poolData) // Debug log
-      const editUrl = new URL(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}`)
+      const editUrl = new URL(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}/edit`)
       editUrl.searchParams.append('password', password)
       editUrl.searchParams.append('creatorAddress', walletAddress)
-      let response = await fetch(editUrl, {
+      const response = await fetch(editUrl, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
         body: JSON.stringify(poolData)
       })
-      let result = await response.json()
+      const result = await response.json()
       if (!response.ok) {
-        console.warn('PATCH request failed, trying PUT method:', result)
-        // Fallback to PUT method
-        response = await fetch(editUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
-          body: JSON.stringify(poolData)
-        })
-        result = await response.json()
-        if (!response.ok) {
-          throw new Error(`${result.error || 'Failed to update pool'} (${result.code || 'UNKNOWN_ERROR'})`)
-        }
+        throw new Error(`${result.error || 'Failed to update pool'} (${result.code || 'UNKNOWN_ERROR'})`)
       }
       setShowEditModal(false)
       showSuccess("Pool Updated", `Pool "${poolName}" has been updated successfully`)
-      loadPools()
+      await loadPools()
+      // Refresh balance for the edited pool
+      const balance = await fetchBalance(selectedPool.id)
+      if (balance !== null) {
+        setPools(prev =>
+          prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
+        )
+        setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
+      }
     } catch (error) {
       console.error('Edit pool error:', error) // Detailed error logging
       showError(
@@ -462,10 +505,29 @@ export default function Dashboard() {
         throw new Error(`${result.error || 'Failed to top up pool'} (${result.code || 'UNKNOWN_ERROR'})`)
       }
       showSuccess("Pool Topped Up", `Pool topped up successfully! Transaction ID: ${result.transactionId}`)
-      loadPools()
+      // Refresh balance after top-up
+      const balance = await fetchBalance(selectedPool.id)
+      if (balance !== null) {
+        setPools(prev =>
+          prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
+        )
+        setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
+      }
     } catch (error) {
       console.error('Top up pool error:', error) // Detailed error logging
       showError("Top Up Failed", `Error topping up pool: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  const handleRefreshBalance = async () => {
+    if (!selectedPool) return showError("No Pool Selected", "Please select a pool first")
+    const balance = await fetchBalance(selectedPool.id)
+    if (balance !== null) {
+      setPools(prev =>
+        prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
+      )
+      setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
+      showSuccess("Balance Refreshed", `Balance for pool "${selectedPool.name}" has been updated`)
     }
   }
 
@@ -511,7 +573,14 @@ export default function Dashboard() {
         showError("Sponsor Failed", errors.length > 0 ? `No credits sponsored. Errors: ${errors.join('; ')}` : "No credits sponsored.")
       }
 
-      loadPools()
+      // Refresh balance after sponsoring credits
+      const balance = await fetchBalance(selectedPool.id)
+      if (balance !== null) {
+        setPools(prev =>
+          prev.map(p => (p.id === selectedPool.id ? { ...p, balance } : p))
+        )
+        setSelectedPool(prev => (prev ? { ...prev, balance } : prev))
+      }
     } catch (error) {
       console.error('Sponsor credits error:', error)
       showError(
@@ -564,7 +633,7 @@ export default function Dashboard() {
                 </span>
               </div>
               <div className="text-sm text-gray-600 space-y-1">
-                <div>Balance: <span className="font-medium text-gray-900">{pool.balance.toFixed(4)}</span></div>
+                <div>Balance: <span className="font-medium text-gray-900">{pool.balance !== null ? pool.balance.toFixed(4) : "Loading..."}</span></div>
                 <div>Usage Cap: <span className="font-medium text-gray-900">{pool.usageCap.toFixed(4)}</span></div>
                 <div className="text-xs">Duration: {pool.startTime} - {pool.endTime}</div>
                 <div>Addresses: <span className="font-medium text-gray-900">{pool.addresses.length}</span></div>
@@ -658,6 +727,15 @@ export default function Dashboard() {
                     </button>
                   </div>
                   <div className="space-y-3">
+                    <h4 className="text-sm font-semibold text-gray-700">REFRESH BALANCE</h4>
+                    <button
+                      onClick={handleRefreshBalance}
+                      className="w-full bg-blue-500 text-white p-3 rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+                    >
+                      REFRESH BALANCE
+                    </button>
+                  </div>
+                  <div className="space-y-3">
                     <h4 className="text-sm font-semibold text-gray-700">DOWNLOAD WALLET</h4>
                     <button
                       onClick={handleDownloadWallet}
@@ -719,7 +797,9 @@ export default function Dashboard() {
                     </div>
                     <div className="flex justify-between py-3 border-b border-gray-100">
                       <span className="text-gray-600 font-medium">Current Balance:</span>
-                      <span className="font-semibold text-gray-900">{selectedPool.balance.toFixed(2)} Credits</span>
+                      <span className="font-semibold text-gray-900">
+                        {selectedPool.balance !== null ? `${selectedPool.balance.toFixed(2)} Credits` : "Loading..."}
+                      </span>
                     </div>
                     <div className="flex justify-between py-3">
                       <span className="text-gray-600 font-medium">Whitelisted Addresses ({selectedPool.addresses.length}):</span>
