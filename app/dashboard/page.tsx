@@ -17,6 +17,7 @@ interface Pool {
   endTime: string
   addresses: string[]
   poolId: string
+  sponsorInfo: string
 }
 
 interface Strategy {
@@ -36,6 +37,7 @@ export default function Dashboard() {
   const [selectedPool, setSelectedPool] = useState<Pool | null>(null)
   const [showWalletModal, setShowWalletModal] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
   const [showPoolActions, setShowPoolActions] = useState(false)
   const [showAddressesModal, setShowAddressesModal] = useState(false)
   const [totalPools, setTotalPools] = useState(0)
@@ -144,7 +146,8 @@ export default function Dashboard() {
         startTime: pool.startTime,
         endTime: pool.endTime,
         addresses: pool.whitelist,
-        poolId: id
+        poolId: id,
+        sponsorInfo: pool.sponsorInfo || ''
       }))
       setPools(poolArray)
       setTotalPools(poolArray.length)
@@ -272,6 +275,72 @@ export default function Dashboard() {
       showError(
         "Creation Failed",
         `Error creating pool: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  }
+
+  const handleEditPool = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedPool) return showError("No Pool Selected", "Please select a pool to edit")
+    const formData = new FormData(e.target as HTMLFormElement)
+    const poolName = formData.get("poolName") as string
+    const startTime = formData.get("startTime") as string
+    const endTime = formData.get("endTime") as string
+    const usageCap = parseFloat(formData.get("usageCap") as string)
+    const addresses = (formData.get("addresses") as string).split('\n').map(a => a.trim()).filter(a => a)
+    const sponsorInfo = formData.get("sponsorInfo") as string
+    const password = window.prompt('Enter the pool password to confirm changes:')
+    if (!password) return showError("Password Required", "Password required to edit pool")
+
+    if (!poolName.trim()) return showError("Invalid Pool Name", "Please enter a valid pool name")
+    const invalidAddresses = addresses.filter(a => !isValidArweaveAddress(a))
+    if (invalidAddresses.length > 0) return showError("Invalid Addresses", `Please fix invalid addresses: ${invalidAddresses.join(', ')}`)
+    const startDateTime = new Date(startTime)
+    const endDateTime = new Date(endTime)
+    if (startDateTime >= endDateTime) return showError("Invalid Dates", "Start time must be before end time")
+
+    const poolData = {
+      name: poolName,
+      startTime: localToZulu(startTime),
+      endTime: localToZulu(endTime),
+      usageCap,
+      whitelist: addresses,
+      creatorAddress: walletAddress,
+      sponsorInfo
+    }
+
+    try {
+      console.log('Editing pool with ID:', selectedPool.id, 'Payload:', poolData) // Debug log
+      const editUrl = new URL(`${SERVER_URL}/pool/${encodeURIComponent(selectedPool.id)}`)
+      editUrl.searchParams.append('password', password)
+      editUrl.searchParams.append('creatorAddress', walletAddress)
+      let response = await fetch(editUrl, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
+        body: JSON.stringify(poolData)
+      })
+      let result = await response.json()
+      if (!response.ok) {
+        console.warn('PATCH request failed, trying PUT method:', result)
+        // Fallback to PUT method
+        response = await fetch(editUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': DEPLOY_API_KEY },
+          body: JSON.stringify(poolData)
+        })
+        result = await response.json()
+        if (!response.ok) {
+          throw new Error(`${result.error || 'Failed to update pool'} (${result.code || 'UNKNOWN_ERROR'})`)
+        }
+      }
+      setShowEditModal(false)
+      showSuccess("Pool Updated", `Pool "${poolName}" has been updated successfully`)
+      loadPools()
+    } catch (error) {
+      console.error('Edit pool error:', error) // Detailed error logging
+      showError(
+        "Update Failed",
+        `Error updating pool: ${error instanceof Error ? error.message : String(error)}`
       )
     }
   }
@@ -558,18 +627,9 @@ export default function Dashboard() {
               <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8">
                 <div className="flex justify-between items-center mb-6">
                   <h3 className="text-lg font-semibold">POOL ACTIONS - {selectedPool.name}</h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setShowAddressesModal(true)}
-                      className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-medium transition-colors"
-                    >
-                      <Users className="w-4 h-4" />
-                      View Addresses
-                    </button>
-                    <button onClick={() => setShowPoolActions(false)} className="text-gray-400 hover:text-gray-600">
-                      <X className="w-5 h-5" />
-                    </button>
-                  </div>
+                  <button onClick={() => setShowPoolActions(false)} className="text-gray-400 hover:text-gray-600">
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
                 <div className="space-y-6">
                   <div className="space-y-3">
@@ -672,7 +732,13 @@ export default function Dashboard() {
                       </button>
                     </div>
                   </div>
-                  <div className="flex justify-end mt-6">
+                  <div className="flex justify-end mt-6 gap-4">
+                    <button
+                      onClick={() => setShowEditModal(true)}
+                      className="bg-blue-500 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+                    >
+                      EDIT POOL
+                    </button>
                     <button
                       onClick={handleSponsorCredits}
                       className="bg-yellow-500 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-yellow-600 transition-colors"
@@ -850,6 +916,102 @@ export default function Dashboard() {
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
+                  className="bg-white text-gray-700 border-2 border-black p-3 text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  CANCEL
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Pool Modal */}
+      {showEditModal && selectedPool && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white border-2 border-black shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-8 relative">
+            <button
+              onClick={() => setShowEditModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <h3 className="text-xl font-semibold mb-6 text-gray-900">EDIT POOL - {selectedPool.name}</h3>
+            <form onSubmit={handleEditPool} className="space-y-5">
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-gray-700">POOL NAME</label>
+                <input
+                  name="poolName"
+                  type="text"
+                  defaultValue={selectedPool.name}
+                  className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-gray-700">START TIME</label>
+                  <input
+                    name="startTime"
+                    type="datetime-local"
+                    defaultValue={selectedPool.startTime.slice(0, 16)}
+                    className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2 text-gray-700">END TIME</label>
+                  <input
+                    name="endTime"
+                    type="datetime-local"
+                    defaultValue={selectedPool.endTime.slice(0, 16)}
+                    className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-gray-700">MAX CREDITS PER WALLET (USAGE CAP)</label>
+                <input
+                  name="usageCap"
+                  type="number"
+                  step="0.000000000001"
+                  min="0"
+                  defaultValue={selectedPool.usageCap}
+                  className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-gray-700">WHITELISTED ADDRESSES</label>
+                <textarea
+                  name="addresses"
+                  rows={4}
+                  defaultValue={selectedPool.addresses.join('\n')}
+                  placeholder="Enter one Arweave address per line"
+                  className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                ></textarea>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-2 text-gray-700">SPONSOR INFORMATION</label>
+                <textarea
+                  name="sponsorInfo"
+                  rows={4}
+                  defaultValue={selectedPool.sponsorInfo || ''}
+                  className="w-full p-3 border-2 border-black bg-white text-sm focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                  required
+                ></textarea>
+              </div>
+              <div className="flex gap-4">
+                <button
+                  type="submit"
+                  className="flex-1 bg-blue-500 text-white p-3 text-sm font-medium hover:bg-blue-600 transition-colors"
+                >
+                  SAVE CHANGES
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
                   className="bg-white text-gray-700 border-2 border-black p-3 text-sm font-medium hover:bg-gray-50 transition-colors"
                 >
                   CANCEL
