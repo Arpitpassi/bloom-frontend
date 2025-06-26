@@ -145,10 +145,14 @@ export function usePoolManager(walletAddress: string, isWalletConnected: boolean
     const endDateTime = new Date(endTime)
     if (startDateTime >= endDateTime) return showError("Invalid Dates", "Start time must be before end time")
 
+    // Only convert to Zulu time if the startTime or endTime has changed
+    const formattedStartTime = startTime === selectedPool.startTime.slice(0, 16) ? selectedPool.startTime : localToZulu(startTime)
+    const formattedEndTime = endTime === selectedPool.endTime.slice(0, 16) ? selectedPool.endTime : localToZulu(endTime)
+
     const poolData = {
       name: poolName,
-      startTime: localToZulu(startTime),
-      endTime: localToZulu(endTime),
+      startTime: formattedStartTime,
+      endTime: formattedEndTime,
       usageCap,
       whitelist: addresses,
       creatorAddress: walletAddress

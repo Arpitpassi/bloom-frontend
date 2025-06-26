@@ -257,7 +257,7 @@ export default function Dashboard() {
       {/* Main Content */}
       <div className="flex-1 p-6 overflow-y-auto">
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 text-center mb-6">
-          <h2 className="text-xl font-bold mb-4 text-gray-900">BLOOM POOL MANAGER</h2>
+          <h2 className="text-xl font-bold mb-4 text-gray-900">FAUCET MANAGER</h2>
           {isWalletConnected ? (
             <div className="flex items-center justify-between">
               <div className="text-center">
@@ -374,7 +374,7 @@ export default function Dashboard() {
               // Replace the pool information section in your Dashboard component with this:
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
                 <div className="mb-6">
-                  <h3 className="text-lg font-semibold mb-6 text-gray-900">POOL INFORMATION</h3>
+                  <h3 className="text-lg font-semibold mb-6 text-gray-900">FAUCET INFORMATION</h3>
 
                   {/* Main content area with pool info and time dial */}
                   <div className="flex justify-between items-start mb-6">
@@ -621,7 +621,7 @@ export default function Dashboard() {
       {/* Edit Pool Modal */}
       {showEditModal && selectedPool && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white border-2 border-gray-300 shadow-xl max-w-xl w-full max-h-[80vh] overflow-y-auto p-8 relative rounded-xl">
+          <div className="bg-white border-2 border-gray-300 shadow-xl max-w-xl w-full max-h-[80vh] overflow-y-auto p-8 relative">
             <button
               onClick={() => setShowEditModal(false)}
               className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
